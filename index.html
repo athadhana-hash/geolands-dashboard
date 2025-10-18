@@ -4,7 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Landslide Detection Dashboard - MPU6050 + Weather</title>
+  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Leaflet CSS and JS for map tiles -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -14,8 +18,18 @@
       transition: all 0.3s ease; animation: fadeIn 1s ease-in;
     }
     @keyframes fadeIn { from{opacity:0;} to{opacity:1;} }
-    h1 { text-align:center; margin:0; color:#a0aec0; }
-    .header { display:flex; justify-content:space-between; align-items:center; margin-bottom:25px; }
+    h1 { 
+      text-align: center; /* Explicit center alignment */
+      margin: 0 auto 25px; /* Center margin and bottom spacing */
+      color: #a0aec0; 
+      font-size: 1.8rem; /* Slightly larger for emphasis */
+    }
+    .header { 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center; 
+      margin-bottom: 25px; 
+    }
     .theme-btn {
       background-color:#4a5568; border:none; color:#f1f5f9;
       font-size:0.9rem; padding:8px 14px; border-radius:8px; cursor:pointer;
@@ -33,6 +47,21 @@
     .card h3 { color:#a0aec0; margin-bottom:10px; font-size:1.05rem; }
     .data-value { font-size:1.8rem; font-weight:bold; color:#edf2f7; }
     .desc { font-size:0.9rem; color:#a0aec0; }
+
+    /* Full-width map section */
+    .map-section {
+      background:#2d3748; border:1px solid #4a5568; border-radius:12px;
+      box-shadow:0 2px 8px rgba(0,0,0,0.5); padding:20px; margin-bottom:25px;
+      transition:transform 0.3s ease;
+    }
+    .map-section:hover { transform:translateY(-3px); box-shadow:0 4px 15px rgba(0,0,0,0.7); }
+    .map-section h3 { 
+      color:#a0aec0; 
+      margin-bottom:15px; 
+      text-align: center; /* Center the map title */
+      font-size: 1.2rem; 
+    }
+    #map { height: 400px; width: 100%; border-radius: 8px; }
 
     .status-card {
       background:#2d3748; border:1px solid #4a5568; border-radius:12px;
@@ -63,7 +92,8 @@
     body.light-mode h1 { color:#334155; }
     body.light-mode .card,
     body.light-mode .status-card,
-    body.light-mode .chart-container {
+    body.light-mode .chart-container,
+    body.light-mode .map-section {
       background:#ffffff; border:1px solid #cbd5e1; color:#1e293b;
     }
     body.light-mode .desc { color:#475569; }
@@ -73,6 +103,7 @@
     @media (max-width:768px){
       .charts-wrapper{grid-template-columns:1fr;}
       canvas{height:250px;}
+      #map { height: 300px; } /* Adjusted for mobile */
     }
   </style>
 </head>
@@ -118,6 +149,13 @@
     <p class="desc">Monitor slope changes, ground vibration, and rainfall intensity</p>
   </div>
 
+  <!-- Full-width map section -->
+  <div class="map-section">
+    <h3>🗺️ Monitoring Location Map</h3>
+    <div id="map"></div>
+    <p class="desc" style="text-align:center; margin-top:10px;">Interactive map with OpenStreetMap tiles. Marker shows landslide monitoring site. Full width for better visibility.</p>
+  </div>
+
   <div class="charts-wrapper">
     <div class="chart-container">
       <h3>📊 Real-Time Slope Angle Graph</h3>
@@ -132,6 +170,7 @@
   <footer>© 2025 Landslide Detection System – IoT Prototype by GEOLANDS</footer>
 
   <script>
+    // Chart.js setup
     const timeLabels = [], angleDataX = [], angleDataY = [], vibrationData = [];
     const angleChart = new Chart(document.getElementById('angleChart'), {
       type:'line', data:{ labels:timeLabels, datasets:[
@@ -145,74 +184,118 @@
       ]}, options:{ responsive:true, scales:{ y:{beginAtZero:true, min:0, max:0.5} } }
     });
 
+    // Leaflet Map Initialization
+    const map = L.map('map').setView([5.550, 95.320], 13); // Coordinates for Banda Aceh, Lereng Aman
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+    // Add marker
+    const marker = L.marker([5.550, 95.320]).addTo(map)
+      .bindPopup('Landslide Monitoring Site: Banda Aceh, Lereng Aman District')
+      .openPopup();
+
     async function fetchCuacaBMKG(kodeAdm4) {
       try {
         const url = `https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=${kodeAdm4}`;
         const resp = await fetch(url);
         if (!resp.ok) throw new Error('Failed to fetch BMKG data');
-        const json = await resp.json(); const data = json.data[0];
-        const suhu = parseFloat(data.t); const kelembapan = parseFloat(data.hu);
-        const kondisi = data.weather_desc; let curah = 0;
-        if (kondisi.toLowerCase().includes('rain')) curah = 2;
+        const json = await resp.json();
+        if (!json.data || json.data.length === 0) throw new Error('No data available');
+        const data = json.data[0];
+        const suhu = parseFloat(data.t);
+        const kelembapan = parseFloat(data.hu);
+        const kondisi = data.weather_desc;
+        let curah = 0;
+        if (kondisi.toLowerCase().includes('rain')) curah = 2; // Could parse actual rainfall if available
         return { suhu, kelembapan, kondisi, curah };
-      } catch { return null; }
+      } catch (error) {
+        console.error('Weather fetch error:', error);
+        return null; // Return null to handle gracefully
+      }
     }
 
     async function simulateData() {
       let kodeAdm4 = localStorage.getItem('kodeAdm4') || "11.01.01.2001";
       const newTime = new Date().toLocaleTimeString().slice(0,5);
-      const newAngle = 5 + Math.random()*15; const newVibration = Math.random()*0.3;
+      const newAngle = 5 + Math.random()*15;
+      const newVibration = Math.random()*0.3;
       const cuaca = await fetchCuacaBMKG(kodeAdm4);
 
+      // Update charts
       timeLabels.push(newTime);
-      angleDataX.push(newAngle); angleDataY.push(newAngle - Math.random()*2);
+      angleDataX.push(newAngle);
+      angleDataY.push(newAngle - Math.random()*2);
       vibrationData.push(newVibration);
-      if (timeLabels.length>10){timeLabels.shift(); angleDataX.shift(); angleDataY.shift(); vibrationData.shift();}
-      angleChart.update(); vibrationChart.update();
+      if (timeLabels.length > 10) {
+        timeLabels.shift();
+        angleDataX.shift();
+        angleDataY.shift();
+        vibrationData.shift();
+      }
+      angleChart.update();
+      vibrationChart.update();
 
-      document.getElementById('kemiringan').innerText = newAngle.toFixed(1)+'°';
-      document.getElementById('getaran').innerText = newVibration.toFixed(2)+' g';
-      if(cuaca){
-        document.getElementById('suhu').innerText = cuaca.suhu.toFixed(1)+'°C';
-        document.getElementById('kelembapan').innerText = cuaca.kelembapan.toFixed(0)+'%';
-        document.getElementById('curahHujan').innerText = cuaca.kondisi+' ('+cuaca.curah+' mm/h)';
+      // Update UI
+      document.getElementById('kemiringan').innerText = newAngle.toFixed(1) + '°';
+      document.getElementById('getaran').innerText = newVibration.toFixed(2) + ' g';
+      if (cuaca) {
+        document.getElementById('suhu').innerText = cuaca.suhu.toFixed(1) + '°C';
+        document.getElementById('kelembapan').innerText = cuaca.kelembapan.toFixed(0) + '%';
+        document.getElementById('curahHujan').innerText = cuaca.kondisi + ' (' + cuaca.curah + ' mm/h)';
         document.getElementById('cuacaKondisi').innerText = cuaca.kondisi;
+      } else {
+        // Fallback if API fails
+        document.getElementById('suhu').innerText = 'N/A';
+        document.getElementById('kelembapan').innerText = 'N/A';
+        document.getElementById('curahHujan').innerText = 'Data unavailable';
+        document.getElementById('cuacaKondisi').innerText = 'Unknown';
       }
 
-      const statusDot=document.getElementById('statusDot');
-      const statusText=document.getElementById('statusText');
-      const kondisiBahaya=(newAngle>15||newVibration>0.25||(cuaca&&cuaca.curah>2));
-      if(kondisiBahaya){
-        statusDot.className='status-dot dot-red';
-        statusText.innerText='Awas'; statusText.style.color='#dc2626';
-      } else if(newAngle>10||newVibration>0.15||(cuaca&&cuaca.curah>1)){
-        statusDot.className='status-dot dot-yellow';
-        statusText.innerText='Siaga'; statusText.style.color='#ca8a04';
+      // Status logic
+      const statusDot = document.getElementById('statusDot');
+      const statusText = document.getElementById('statusText');
+      const kondisiBahaya = (newAngle > 15 || newVibration > 0.25 || (cuaca && cuaca.curah > 2));
+      if (kondisiBahaya) {
+        statusDot.className = 'status-dot dot-red';
+        statusText.innerText = 'Awas';
+        statusText.style.color = '#dc2626';
+      } else if (newAngle > 10 || newVibration > 0.15 || (cuaca && cuaca.curah > 1)) {
+        statusDot.className = 'status-dot dot-yellow';
+        statusText.innerText = 'Siaga';
+        statusText.style.color = '#ca8a04';
       } else {
-        statusDot.className='status-dot dot-green';
-        statusText.innerText='Normal'; statusText.style.color='#16a34a';
+        statusDot.className = 'status-dot dot-green';
+        statusText.innerText = 'Normal';
+        statusText.style.color = '#16a34a';
       }
     }
-    setInterval(simulateData,5000);
+    setInterval(simulateData, 5000);
 
-    document.getElementById('setKodeBtn').addEventListener('click',()=>{
-      const kodeAdm4=document.getElementById('kodeAdm4Input').value;
-      if(kodeAdm4){localStorage.setItem('kodeAdm4',kodeAdm4); alert('ADM4 Code set!');}
-      else alert('Enter a valid ADM4 Code.');
+    document.getElementById('setKodeBtn').addEventListener('click', () => {
+      const kodeAdm4 = document.getElementById('kodeAdm4Input').value.trim();
+      const adm4Regex = /^\d{2}\.\d{2}\.\d{2}\.\d{4}$/; // Basic validation for ADM4 format
+      if (adm4Regex.test(kodeAdm4)) {
+        localStorage.setItem('kodeAdm4', kodeAdm4);
+        alert('ADM4 Code set!');
+      } else {
+        alert('Enter a valid ADM4 Code (e.g., 11.01.01.2001).');
+      }
     });
 
     // Theme toggle
-    const themeToggle=document.getElementById('themeToggle');
-    const savedTheme=localStorage.getItem('theme');
-    if(savedTheme==='light'){
+    const themeToggle = document.getElementById('themeToggle');
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'light') {
       document.body.classList.add('light-mode');
-      themeToggle.textContent='🌙 Night Mode';
-    } else themeToggle.textContent='☀️ Day Mode';
-    themeToggle.addEventListener('click',()=>{
+      themeToggle.textContent = '🌙 Night Mode';
+    } else {
+      themeToggle.textContent = '☀️ Day Mode';
+    }
+    themeToggle.addEventListener('click', () => {
       document.body.classList.toggle('light-mode');
-      const isLight=document.body.classList.contains('light-mode');
-      themeToggle.textContent=isLight?'🌙 Night Mode':'☀️ Day Mode';
-      localStorage.setItem('theme',isLight?'light':'dark');
+      const isLight = document.body.classList.contains('light-mode');
+      themeToggle.textContent = isLight ? '🌙 Night Mode' : '☀️ Day Mode';
+      localStorage.setItem('theme', isLight ? 'light' : 'dark');
     });
   </script>
 </body>
